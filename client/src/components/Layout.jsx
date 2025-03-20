@@ -1,6 +1,6 @@
 import React from 'react';
 import { Link, Outlet, useLocation } from 'react-router-dom';
-import { Camera, Users, Clock, Home, Upload } from 'lucide-react';
+import { Camera, Users, Clock, Home, Upload, Car, MapPin } from 'lucide-react';
 import { cn } from '../lib/utils';
 
 export const Navigation = () => {
@@ -12,10 +12,12 @@ export const Navigation = () => {
     { to: '/attendance', label: 'Attendance', icon: Users },
     { to: '/logs', label: 'Logs', icon: Clock },
     { to: '/upload', label: 'Upload', icon: Upload },
+    { to: '/parking', label: 'Parking', icon: Car },
+    { to: '/venue', label: 'Venue', icon: MapPin },
   ];
 
   return (
-    <nav className="fixed top-0 left-0 h-screen w-20 bg-gray-900 flex flex-col items-center py-8 space-y-8 z-100">
+    <nav className="fixed top-0 left-0 h-screen w-20 bg-gray-900 flex flex-col items-center py-8 space-y-8 z-50">
       {links.map(({ to, label, icon: Icon }) => (
         <Link
           key={to}
@@ -39,11 +41,9 @@ export default function Layout() {
   return (
     <div className="min-h-screen bg-gray-100">
       <Navigation />
-      <main>
+      <main className="ml-20">
         <Outlet />
       </main>
-      <div className="fixed bottom-8 right-8 z-50">
-      </div>
     </div>
   );
 }

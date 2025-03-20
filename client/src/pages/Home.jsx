@@ -3,34 +3,6 @@ import { Link } from 'react-router-dom';
 import { Camera, Users, Brain, ArrowRight, Shield, Clock, CheckCircle, Eye, Cpu, Zap, Database } from 'lucide-react';
 import Footer from '../components/Footer';
 
-// Header Component
-const Header = () => {
-  return (
-    <header className="fixed top-0 left-0 right-0 z-50 bg-black/80 backdrop-blur-md">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div className="flex justify-between items-center h-16">
-          <div className="flex items-center">
-            <Eye className="w-8 h-8 text-blue-500 mr-4" />
-            <span className="text-2xl font-bold bg-gradient-to-r from-blue-400 to-purple-600 text-transparent bg-clip-text">512D</span>
-          </div>
-          <nav className="hidden md:flex space-x-8">
-            {["Home", "Features", "Pricing", "Contact"].map((item) => (
-              <a key={item} href={`#${item.toLowerCase()}`} className="text-gray-300 hover:text-white transition-colors">
-                {item}
-              </a>
-            ))}
-          </nav>
-          <div>
-            <Link to="/login" className="px-4 py-2 rounded-md bg-blue-600 text-white hover:bg-blue-700 transition-colors">
-              Login
-            </Link>
-          </div>
-        </div>
-      </div>
-    </header>
-  );
-};
-
 // Feature Card Component
 const FeatureCard = ({ icon: Icon, title, description }) => {
   return (
@@ -88,8 +60,6 @@ export default function Home() {
 
   return (
     <div className={`min-h-screen bg-black text-white overflow-hidden transition-opacity duration-1000 ${isLoaded ? 'opacity-100' : 'opacity-0'}`}>
-      <Header />  
-     
       {/* Hero Section with static background */}
       <section className="h-screen relative flex items-center" id="home">
         <div className="absolute inset-0 z-0">
