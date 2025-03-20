@@ -370,7 +370,7 @@ const Parking = () => {
                 
                 <h3 className="font-medium text-lg mt-6">Two Wheeler Parking</h3>
                 <div className="flex justify-between items-center p-3 bg-green-50 rounded-lg">
-                  <span className="font-medium">Total Slots</span>
+                  <span className="font-medium">Total slots</span>
                   <span className="text-lg font-bold">{parkingStats.totalTwoWheelerSlots}</span>
                 </div>
                 <div className="flex justify-between items-center p-3 bg-green-50 rounded-lg">
