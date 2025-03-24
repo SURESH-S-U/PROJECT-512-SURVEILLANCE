@@ -1,11 +1,17 @@
 import os
-
-# Import from other modules
 from database import load_db, add_face
-from detection_logging import load_detection_logs
+from detection_logging import load_detection_logs, create_flask_app
 from file_utils import start_cleanup_thread, capture_and_save
 from video import real_time_recognition
 import cv2
+from threading import Thread
+from waitress import serve  # Import waitress for production-ready WSGI server
+
+def start_flask_app():
+    """Start the Flask app using Waitress."""
+    flask_app = create_flask_app()
+    print("✅ Flask API started at http://localhost:5000")
+    serve(flask_app, host='0.0.0.0', port=5000)  # Use Waitress to serve the app
 
 def main():
     """Main application entry point with command-line interface."""
@@ -13,9 +19,14 @@ def main():
     load_db()  # Load saved embeddings at startup
     load_detection_logs()  # Load detection logs
     start_cleanup_thread()  # Start the cleanup thread
-    
+
+    # Start the Flask API in a separate thread
+    flask_thread = Thread(target=start_flask_app)
+    flask_thread.daemon = True  # Daemonize thread to exit when the main program exits
+    flask_thread.start()
+
     # Default camera source
-    src = "rtsp://admin:bitsathY@192.168.1.11"  # Default camera source
+    src = 0  # Default camera source
     
     while True:
         print("\nOptions:")
@@ -57,6 +68,8 @@ def main():
 if __name__ == "__main__":
     try:
         main()
+    except KeyboardInterrupt:
+        print("\n👋 Exiting gracefully...")
     finally:
         from config import cleanup_timer
         if cleanup_timer is not None:
