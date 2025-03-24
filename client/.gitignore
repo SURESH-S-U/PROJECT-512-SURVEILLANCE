@@ -1,2 +1,2 @@
-package.json
-package-lock.json
+# Ignore node_modules (ALWAYS ignore this)
+node_modules/
