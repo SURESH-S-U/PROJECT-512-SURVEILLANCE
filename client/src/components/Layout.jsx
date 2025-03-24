@@ -1,6 +1,6 @@
 import React from 'react';
 import { Link, Outlet, useLocation } from 'react-router-dom';
-import { Camera, Users, Clock, Home, Upload, Car, MapPin } from 'lucide-react';
+import { Camera, Users, Home, Upload, Car, MapPin, MessageSquare } from 'lucide-react';
 import { cn } from '../lib/utils';
 
 export const Navigation = () => {
@@ -10,10 +10,10 @@ export const Navigation = () => {
     { to: '/', label: 'Home', icon: Home },
     { to: '/live', label: 'Live Feed', icon: Camera },
     { to: '/attendance', label: 'Attendance', icon: Users },
-    { to: '/logs', label: 'Logs', icon: Clock },
     { to: '/upload', label: 'Upload', icon: Upload },
     { to: '/parking', label: 'Parking', icon: Car },
     { to: '/venue', label: 'Venue', icon: MapPin },
+    { to: '/chatbot', label: 'Chatbot', icon: MessageSquare },
   ];
 
   return (

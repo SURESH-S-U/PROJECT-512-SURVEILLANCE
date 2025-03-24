@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from 'recharts';
+import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, LineChart, Line, XAxis, YAxis, CartesianGrid } from 'recharts';
 import { format } from 'date-fns';
-import { Navigation } from '../components/Layout';
 
 // Constants
 const COLORS = ['#0088FE', '#00C49F', '#FFBB28'];
@@ -21,6 +20,16 @@ const CustomLabel = ({ cx, cy, midAngle, innerRadius, outerRadius, percent }) =>
 
 // Default total students
 const TOTAL_STUDENTS = 10;
+
+// Mock data for recognition trends
+const mockTimeData = [
+  { time: '08:00', known: 4, unknown: 1 },
+  { time: '09:00', known: 7, unknown: 2 },
+  { time: '10:00', known: 12, unknown: 3 },
+  { time: '11:00', known: 15, unknown: 4 },
+  { time: '12:00', known: 10, unknown: 2 },
+  { time: '13:00', known: 8, unknown: 1 },
+];
 
 const Attendance = () => {
   const [searchTerm, setSearchTerm] = useState('');
@@ -157,117 +166,131 @@ const Attendance = () => {
   );
 
   return (
-    <div className="flex">
-      <Navigation />
-      <div className="flex-1 ml-20 p-8 bg-gray-50 min-h-screen">
-        <div className="max-w-7xl mx-auto">
-          <h1 className="text-3xl font-bold mb-8">Attendance Dashboard</h1>
+    <div className="p-8 bg-gray-50 min-h-screen">
+      <div className="max-w-7xl mx-auto">
+        <h1 className="text-3xl font-bold mb-8">Attendance Dashboard</h1>
 
-          {/* Search and Date Filter */}
-          <div className="flex gap-4 mb-8">
-            <input
-              type="text"
-              placeholder="Search students..."
-              className="flex-1 p-2 border rounded-lg"
-              onChange={(e) => setSearchTerm(e.target.value)}
-            />
-            <input
-              type="date"
-              value={selectedDate}
-              className="p-2 border rounded-lg"
-              onChange={(e) => setSelectedDate(e.target.value)}
-            />
+        {/* Search and Date Filter */}
+        <div className="flex gap-4 mb-8">
+          <input
+            type="text"
+            placeholder="Search students..."
+            className="flex-1 p-2 border rounded-lg"
+            onChange={(e) => setSearchTerm(e.target.value)}
+          />
+          <input
+            type="date"
+            value={selectedDate}
+            className="p-2 border rounded-lg"
+            onChange={(e) => setSelectedDate(e.target.value)}
+          />
+        </div>
+
+        {error && (
+          <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded mb-4">
+            {error}
+          </div>
+        )}
+
+        {/* Recognition Trends Graph */}
+        <div className="bg-white p-6 rounded-xl shadow-lg mb-8">
+          <h2 className="text-xl font-bold mb-6">Recognition Trends</h2>
+          <div className="h-96">
+            <ResponsiveContainer width="100%" height="100%">
+              <LineChart data={mockTimeData}>
+                <CartesianGrid strokeDasharray="3 3" />
+                <XAxis dataKey="time" />
+                <YAxis />
+                <Tooltip />
+                <Line type="monotone" dataKey="known" stroke="#3B82F6" strokeWidth={2} />
+                <Line type="monotone" dataKey="unknown" stroke="#F59E0B" strokeWidth={2} />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+          {/* Attendance Chart */}
+          <div className="bg-white p-6 rounded-xl shadow-lg">
+            <h2 className="text-xl font-bold mb-6">Attendance Overview</h2>
+            <div className="h-64">
+              <ResponsiveContainer width="100%" height="100%">
+                <PieChart>
+                  <Pie
+                    data={attendanceData}
+                    cx="50%"
+                    cy="50%"
+                    labelLine={false}
+                    label={CustomLabel}
+                    outerRadius={80}
+                    fill="#8884d8"
+                    dataKey="value"
+                  >
+                    {attendanceData.map((entry, index) => (
+                      <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                    ))}
+                  </Pie>
+                  <Tooltip />
+                </PieChart>
+              </ResponsiveContainer>
+            </div>
           </div>
 
-          {error && (
-            <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded mb-4">
-              {error}
+          {/* Quick Stats */}
+          <div className="bg-white p-6 rounded-xl shadow-lg">
+            <h2 className="text-xl font-bold mb-6">Quick Stats</h2>
+            <div className="space-y-4">
+              {[
+                { label: 'Total Students', value: quickStats.totalStudents.toString() },
+                { label: 'Present Today', value: quickStats.presentToday.toString() },
+                { label: 'Absent Today', value: quickStats.onLeave.toString() }
+              ].map((stat, index) => (
+                <div key={index} className="flex justify-between items-center p-3 bg-gray-50 rounded-lg">
+                  <span className="font-medium">{stat.label}</span>
+                  <span className="text-lg font-bold">{stat.value}</span>
+                </div>
+              ))}
             </div>
-          )}
+            <p className="mt-4 text-sm text-gray-600">
+              Out of {quickStats.totalStudents} students, {quickStats.presentToday} are present today.
+              {quickStats.onLeave > 0 && ` ${quickStats.onLeave} students are absent.`}
+            </p>
+          </div>
 
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-            {/* Attendance Chart */}
-            <div className="bg-white p-6 rounded-xl shadow-lg">
-              <h2 className="text-xl font-bold mb-6">Attendance Overview</h2>
-              <div className="h-64">
-                <ResponsiveContainer width="100%" height="100%">
-                  <PieChart>
-                    <Pie
-                      data={attendanceData}
-                      cx="50%"
-                      cy="50%"
-                      labelLine={false}
-                      label={CustomLabel}
-                      outerRadius={80}
-                      fill="#8884d8"
-                      dataKey="value"
-                    >
-                      {attendanceData.map((entry, index) => (
-                        <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-                      ))}
-                    </Pie>
-                    <Tooltip />
-                  </PieChart>
-                </ResponsiveContainer>
-              </div>
-            </div>
-
-            {/* Quick Stats */}
-            <div className="bg-white p-6 rounded-xl shadow-lg">
-              <h2 className="text-xl font-bold mb-6">Quick Stats</h2>
-              <div className="space-y-4">
-                {[
-                  { label: 'Total Students', value: quickStats.totalStudents.toString() },
-                  { label: 'Present Today', value: quickStats.presentToday.toString() },
-                  { label: 'Absent Today', value: quickStats.onLeave.toString() }
-                ].map((stat, index) => (
-                  <div key={index} className="flex justify-between items-center p-3 bg-gray-50 rounded-lg">
-                    <span className="font-medium">{stat.label}</span>
-                    <span className="text-lg font-bold">{stat.value}</span>
-                  </div>
-                ))}
-              </div>
-              <p className="mt-4 text-sm text-gray-600">
-                Out of {quickStats.totalStudents} students, {quickStats.presentToday} are present today.
-                {quickStats.onLeave > 0 && ` ${quickStats.onLeave} students are absent.`}
-              </p>
-            </div>
-
-            {/* Recent Activity */}
-            <div className="bg-white p-6 rounded-xl shadow-lg">
-              <h2 className="text-xl font-bold mb-6">Recent Activity</h2>
-              <div className="space-y-4">
-                {loading ? (
-                  <div className="text-center py-4">Loading...</div>
-                ) : filteredFaces.length > 0 ? (
-                  filteredFaces.slice(0, 5).map((face, index) => (
-                    <div key={index} className="flex items-center gap-4 p-3 bg-gray-50 rounded-lg">
-                      {face.face_image ? (
-                        <img
-                          src={`data:image/jpeg;base64,${face.face_image}`}
-                          alt={face.name}
-                          className="w-12 h-12 rounded-full object-cover"
-                        />
-                      ) : (
-                        <div className="w-12 h-12 rounded-full bg-gray-200" />
-                      )}
-                      <div>
-                        <div className="font-medium">{face.name}</div>
-                        <div className="text-sm text-gray-500">
-                          {new Date(face.timestamp).toLocaleTimeString()}
-                        </div>
+          {/* Recent Activity */}
+          <div className="bg-white p-6 rounded-xl shadow-lg">
+            <h2 className="text-xl font-bold mb-6">Recent Activity</h2>
+            <div className="space-y-4">
+              {loading ? (
+                <div className="text-center py-4">Loading...</div>
+              ) : filteredFaces.length > 0 ? (
+                filteredFaces.slice(0, 5).map((face, index) => (
+                  <div key={index} className="flex items-center gap-4 p-3 bg-gray-50 rounded-lg">
+                    {face.face_image ? (
+                      <img
+                        src={`data:image/jpeg;base64,${face.face_image}`}
+                        alt={face.name}
+                        className="w-12 h-12 rounded-full object-cover"
+                      />
+                    ) : (
+                      <div className="w-12 h-12 rounded-full bg-gray-200" />
+                    )}
+                    <div>
+                      <div className="font-medium">{face.name}</div>
+                      <div className="text-sm text-gray-500">
+                        {new Date(face.timestamp).toLocaleTimeString()}
                       </div>
-                      <span className={`ml-auto px-2 py-1 rounded-full text-xs font-medium ${getStatusClass(face.is_known)}`}>
-                        {face.is_known ? 'Present' : 'Unknown'}
-                      </span>
                     </div>
-                  ))
-                ) : (
-                  <div className="text-center py-4 text-gray-500">
-                    No attendance records found for the selected date.
+                    <span className={`ml-auto px-2 py-1 rounded-full text-xs font-medium ${getStatusClass(face.is_known)}`}>
+                      {face.is_known ? 'Present' : 'Unknown'}
+                    </span>
                   </div>
-                )}
-              </div>
+                ))
+              ) : (
+                <div className="text-center py-4 text-gray-500">
+                  No attendance records found for the selected date.
+                </div>
+              )}
             </div>
           </div>
         </div>

@@ -207,154 +207,157 @@ const Venue = () => {
       <div className="max-w-7xl mx-auto">
         <h1 className="text-3xl font-bold mb-6">Venue Monitoring</h1>
         
-        {/* Camera Controls */}
-        <div className="bg-white p-6 rounded-xl shadow-lg mb-8">
-          <div className="flex flex-wrap items-center justify-between gap-4 mb-4">
-            <h2 className="text-xl font-bold flex items-center">
-              <Camera className="mr-2" /> Live Camera Feed
-            </h2>
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+          {/* Left Column - Camera Feed */}
+          <div className="bg-white p-6 rounded-xl shadow-lg">
+            <div className="flex flex-wrap items-center justify-between gap-4 mb-4">
+              <h2 className="text-xl font-bold flex items-center">
+                <Camera className="mr-2" /> Live Camera Feed
+              </h2>
+              
+              <div className="flex items-center gap-3">
+                <select
+                  value={selectedCamera}
+                  onChange={handleCameraChange}
+                  className="p-2 border rounded-lg"
+                  disabled={loading}
+                >
+                  {availableCameras.map((camera, index) => (
+                    <option key={camera.deviceId} value={camera.deviceId}>
+                      Camera {index + 1} {camera.label ? `- ${camera.label}` : ''}
+                    </option>
+                  ))}
+                </select>
+                
+                <button
+                  onClick={isStreaming ? stopCamera : startCamera}
+                  className={`px-4 py-2 rounded-lg font-medium ${
+                    isStreaming 
+                      ? 'bg-red-500 hover:bg-red-600 text-white' 
+                      : 'bg-blue-500 hover:bg-blue-600 text-white'
+                  }`}
+                  disabled={loading || !selectedCamera}
+                >
+                  {loading ? 'Loading...' : isStreaming ? 'Stop Camera' : 'Start Camera'}
+                </button>
+                
+                <button
+                  onClick={getAvailableCameras}
+                  className="p-2 rounded-lg border hover:bg-gray-100"
+                  title="Refresh camera list"
+                >
+                  <RefreshCw size={20} />
+                </button>
+              </div>
+            </div>
             
-            <div className="flex items-center gap-3">
-              <select
-                value={selectedCamera}
-                onChange={handleCameraChange}
-                className="p-2 border rounded-lg"
-                disabled={loading}
-              >
-                {availableCameras.map((camera, index) => (
-                  <option key={camera.deviceId} value={camera.deviceId}>
-                    Camera {index + 1} {camera.label ? `- ${camera.label}` : ''}
-                  </option>
-                ))}
-              </select>
-              
-              <button
-                onClick={isStreaming ? stopCamera : startCamera}
-                className={`px-4 py-2 rounded-lg font-medium ${
-                  isStreaming 
-                    ? 'bg-red-500 hover:bg-red-600 text-white' 
-                    : 'bg-blue-500 hover:bg-blue-600 text-white'
-                }`}
-                disabled={loading || !selectedCamera}
-              >
-                {loading ? 'Loading...' : isStreaming ? 'Stop Camera' : 'Start Camera'}
-              </button>
-              
-              <button
-                onClick={getAvailableCameras}
-                className="p-2 rounded-lg border hover:bg-gray-100"
-                title="Refresh camera list"
-              >
-                <RefreshCw size={20} />
-              </button>
-            </div>
-          </div>
-          
-          {error && (
-            <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded mb-4">
-              {error}
-            </div>
-          )}
-          
-          <div className="relative aspect-video bg-black rounded-lg overflow-hidden">
-            {isStreaming ? (
-              <video
-                ref={videoRef}
-                autoPlay
-                playsInline
-                muted
-                className="w-full h-full object-contain"
-              />
-            ) : (
-              <div className="absolute inset-0 flex flex-col items-center justify-center text-white">
-                <Camera size={64} className="mb-4 opacity-50" />
-                <p className="text-lg opacity-70">
-                  {availableCameras.length === 0 
-                    ? 'No cameras detected' 
-                    : 'Select a camera and click Start Camera'}
-                </p>
+            {error && (
+              <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded mb-4">
+                {error}
               </div>
             )}
             
-            {/* People count overlay */}
-            {isStreaming && (
-              <div className="absolute top-4 right-4 bg-black bg-opacity-70 text-white px-4 py-2 rounded-full">
-                <span className="text-lg font-bold">{peopleCount}</span>
-                <span className="ml-2">people detected</span>
+            <div className="relative aspect-video bg-black rounded-lg overflow-hidden">
+              {isStreaming ? (
+                <video
+                  ref={videoRef}
+                  autoPlay
+                  playsInline
+                  muted
+                  className="w-full h-full object-contain"
+                />
+              ) : (
+                <div className="absolute inset-0 flex flex-col items-center justify-center text-white">
+                  <Camera size={64} className="mb-4 opacity-50" />
+                  <p className="text-lg opacity-70">
+                    {availableCameras.length === 0 
+                      ? 'No cameras detected' 
+                      : 'Select a camera and click Start Camera'}
+                  </p>
+                </div>
+              )}
+              
+              {/* People count overlay */}
+              {isStreaming && (
+                <div className="absolute top-4 right-4 bg-black bg-opacity-70 text-white px-4 py-2 rounded-full">
+                  <span className="text-lg font-bold">{peopleCount}</span>
+                  <span className="ml-2">people detected</span>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Right Column - Stats and Graphs */}
+          <div className="space-y-8">
+            {/* Current Occupancy */}
+            <div className="bg-white p-6 rounded-xl shadow-lg">
+              <h2 className="text-xl font-bold mb-6">Current Occupancy</h2>
+              
+              <div className="text-center mb-4">
+                <div className="text-5xl font-bold mb-2">{peopleCount}</div>
+                <div className="text-gray-500">out of {maxCapacity} capacity</div>
               </div>
-            )}
-          </div>
-        </div>
-        
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-          {/* Current Occupancy */}
-          <div className="bg-white p-6 rounded-xl shadow-lg">
-            <h2 className="text-xl font-bold mb-6">Current Occupancy</h2>
-            
-            <div className="text-center mb-4">
-              <div className="text-5xl font-bold mb-2">{peopleCount}</div>
-              <div className="text-gray-500">out of {maxCapacity} capacity</div>
+              
+              <div className="w-full bg-gray-200 rounded-full h-4 mb-4">
+                <div 
+                  className={`h-4 rounded-full ${
+                    capacityPercentage < 50 ? 'bg-green-500' : 
+                    capacityPercentage < 80 ? 'bg-yellow-500' : 
+                    'bg-red-500'
+                  }`}
+                  style={{ width: `${capacityPercentage}%` }}
+                ></div>
+              </div>
+              
+              <div className={`text-center font-medium ${capacityStatus.color}`}>
+                {capacityStatus.text} ({capacityPercentage}%)
+              </div>
             </div>
             
-            <div className="w-full bg-gray-200 rounded-full h-4 mb-4">
-              <div 
-                className={`h-4 rounded-full ${
-                  capacityPercentage < 50 ? 'bg-green-500' : 
-                  capacityPercentage < 80 ? 'bg-yellow-500' : 
-                  'bg-red-500'
-                }`}
-                style={{ width: `${capacityPercentage}%` }}
-              ></div>
+            {/* Real-time Count */}
+            <div className="bg-white p-6 rounded-xl shadow-lg">
+              <h2 className="text-xl font-bold mb-6">Real-time Count</h2>
+              <div className="h-64">
+                <ResponsiveContainer width="100%" height="100%">
+                  <LineChart data={countHistory}>
+                    <CartesianGrid strokeDasharray="3 3" />
+                    <XAxis dataKey="time" />
+                    <YAxis />
+                    <Tooltip />
+                    <Line 
+                      type="monotone" 
+                      dataKey="count" 
+                      name="People Count"
+                      stroke="#0088FE" 
+                      strokeWidth={2}
+                      dot={{ r: 4 }}
+                      activeDot={{ r: 6 }}
+                    />
+                  </LineChart>
+                </ResponsiveContainer>
+              </div>
             </div>
             
-            <div className={`text-center font-medium ${capacityStatus.color}`}>
-              {capacityStatus.text} ({capacityPercentage}%)
-            </div>
-          </div>
-          
-          {/* Real-time Count */}
-          <div className="bg-white p-6 rounded-xl shadow-lg">
-            <h2 className="text-xl font-bold mb-6">Real-time Count</h2>
-            <div className="h-64">
-              <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={countHistory}>
-                  <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis dataKey="time" />
-                  <YAxis />
-                  <Tooltip />
-                  <Line 
-                    type="monotone" 
-                    dataKey="count" 
-                    name="People Count"
-                    stroke="#0088FE" 
-                    strokeWidth={2}
-                    dot={{ r: 4 }}
-                    activeDot={{ r: 6 }}
-                  />
-                </LineChart>
-              </ResponsiveContainer>
-            </div>
-          </div>
-          
-          {/* Hourly Trends */}
-          <div className="bg-white p-6 rounded-xl shadow-lg">
-            <h2 className="text-xl font-bold mb-6">Hourly Trends</h2>
-            <div className="h-64">
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={hourlyData}>
-                  <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis dataKey="hour" />
-                  <YAxis />
-                  <Tooltip />
-                  <Legend />
-                  <Bar 
-                    dataKey="count" 
-                    name="Hourly Average"
-                    fill="#00C49F" 
-                    radius={[4, 4, 0, 0]}
-                  />
-                </BarChart>
-              </ResponsiveContainer>
+            {/* Hourly Trends */}
+            <div className="bg-white p-6 rounded-xl shadow-lg">
+              <h2 className="text-xl font-bold mb-6">Hourly Trends</h2>
+              <div className="h-64">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={hourlyData}>
+                    <CartesianGrid strokeDasharray="3 3" />
+                    <XAxis dataKey="hour" />
+                    <YAxis />
+                    <Tooltip />
+                    <Legend />
+                    <Bar 
+                      dataKey="count" 
+                      name="Hourly Average"
+                      fill="#00C49F" 
+                      radius={[4, 4, 0, 0]}
+                    />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
             </div>
           </div>
         </div>
