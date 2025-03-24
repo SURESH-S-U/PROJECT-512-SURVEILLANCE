@@ -4,3 +4,4 @@ __pycache__/
 Data/
 *.json
 dataset/
+!name_mapping.json
