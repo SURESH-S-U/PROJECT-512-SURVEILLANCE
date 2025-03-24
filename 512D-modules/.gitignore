@@ -1,7 +1,0 @@
-node_modules/
-.vscode/
-__pycache__/
-Data/
-*.json
-dataset/
-!name_mapping.json
