@@ -520,6 +520,33 @@ class VideoStream:
         return self.frame
 
 
+def get_box_style(face_type, is_overlapping=False):
+    """
+    Get visual style for a bounding box based on face type and overlap status.
+    
+    Args:
+        face_type: Type of face ("known", "unknown", or "identifying")
+        is_overlapping: Whether this box overlaps with others
+        
+    Returns:
+        Tuple of (color, thickness, line_type)
+    """
+    # Simple color scheme as per user request (BGR format)
+    if face_type == "unknown":
+        color = (0, 0, 255)    # Red for unknown faces
+    elif face_type == "identifying":
+        color = (0, 255, 255)  # Yellow for identifying faces
+    else:
+        color = (0, 255, 0)    # Green for known faces
+    
+    # Increase thickness for overlapping boxes
+    thickness = 3 if is_overlapping else 2
+    
+    # Use different line types for better distinction of overlapping boxes
+    line_type = cv2.LINE_AA if is_overlapping else cv2.LINE_8
+    
+    return color, thickness, line_type
+
 def real_time_recognition(src):
     """Real-time face recognition with dynamic camera source and detection logging."""
     global known_detections, unknown_detections, last_save_time
@@ -541,6 +568,7 @@ def real_time_recognition(src):
     
     frame_counter = 0
     PROCESS_EVERY = 2
+    label_positions = {}  # Track label positions to prevent overlap
 
     while True:
         frame = vs.read()
@@ -559,13 +587,47 @@ def real_time_recognition(src):
         timestamp = datetime.now().isoformat()
         
         scale_factor = 2
+        
+        # Scale all bounding boxes
+        scaled_results = []
         for bbox, name, score in results:
             x1, y1, x2, y2 = [int(coord * scale_factor) for coord in bbox]
+            scaled_results.append(((x1, y1, x2, y2), name, score))
+        
+        # Check for overlapping boxes
+        overlapping_boxes = set()
+        for i, (bbox1, _, _) in enumerate(scaled_results):
+            for j, (bbox2, _, _) in enumerate(scaled_results):
+                if i != j:
+                    # Calculate overlap
+                    x1 = max(bbox1[0], bbox2[0])
+                    y1 = max(bbox1[1], bbox2[1])
+                    x2 = min(bbox1[2], bbox2[2])
+                    y2 = min(bbox1[3], bbox2[3])
+                    
+                    if x1 < x2 and y1 < y2:
+                        # Boxes overlap
+                        overlapping_boxes.add(i)
+                        overlapping_boxes.add(j)
+        
+        # Reset label positions for this frame
+        label_positions = {}
+        
+        # Draw the boxes and labels with different styles
+        for i, (bbox, name, score) in enumerate(scaled_results):
+            x1, y1, x2, y2 = bbox
             
-            # Skip faces that are still being identified
+            # Determine face type for styling
+            face_type = "known"
             if "Identifying" in name:
-                color = (0, 165, 255)
-            elif "Unknown" in name and name.replace(" (tracking)", "") in id_to_name:
+                face_type = "identifying"
+            elif "Unknown" in name:
+                face_type = "unknown"
+                
+            # Get style based on face type and overlap status
+            color, thickness, line_type = get_box_style(face_type, i in overlapping_boxes)
+            
+            if "Unknown" in name and name.replace(" (tracking)", "") in id_to_name:
                 # Log unknown face detection
                 face_id = name.replace(" (tracking)", "")
                 
@@ -589,8 +651,7 @@ def real_time_recognition(src):
                         "embedding": embedding_list,
                         "timestamp": timestamp
                     }
-                
-                color = (0, 0, 255)
+            
             elif not "Identifying" in name:
                 # Log known face detection (excluding "Identifying...")
                 face_id = name.replace(" (tracking)", "")
@@ -611,14 +672,46 @@ def real_time_recognition(src):
                     # Save face image for known face
                     full_size_bbox = [x1, y1, x2, y2]
                     save_face_image(frame, full_size_bbox, face_id, embedding)
-                
-                color = (0, 255, 0) if "Unknown" not in name else (0, 0, 255)
             
-            cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+            # Draw the rectangle with the determined style
+            cv2.rectangle(frame, (x1, y1), (x2, y2), color, thickness, line_type)
+            
+            # Prepare label text
             label = name.replace(" (tracking)", "")
             score_text = f" ({score:.2f})" if score > 0 else ""
-            cv2.putText(frame, f"{label}{score_text}", (x1, y1 - 10), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+            label_text = f"{label}{score_text}"
+            
+            # Find a good position for the label to avoid overlap
+            label_y = y1 - 10  # Default position
+            
+            # Check if this position overlaps with existing labels
+            text_size = cv2.getTextSize(label_text, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 2)[0]
+            text_width, text_height = text_size
+            
+            # Create a rectangle representing the text area
+            text_x1, text_y1 = x1, label_y - text_height
+            text_x2, text_y2 = x1 + text_width, label_y + 5
+            
+            # Check for overlaps with existing label positions
+            overlap = False
+            for pos_id, (tx1, ty1, tx2, ty2) in label_positions.items():
+                if (text_x1 < tx2 and text_x2 > tx1 and 
+                    text_y1 < ty2 and text_y2 > ty1):
+                    overlap = True
+                    break
+            
+            # If overlap, try placing the label inside the box at the bottom
+            if overlap:
+                label_y = y2 - 5
+                text_y1, text_y2 = label_y - text_height, label_y + 5
+            
+            # Store this label position
+            label_id = hash(f"{x1}{y1}{x2}{y2}")
+            label_positions[label_id] = (text_x1, text_y1, text_x2, text_y2)
+            
+            # Draw the label
+            cv2.putText(frame, label_text, (x1, label_y), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2, cv2.LINE_AA)
         
         # Save logs every SAVE_INTERVAL seconds
         if current_time - last_save_time >= SAVE_INTERVAL:
@@ -666,12 +759,32 @@ def load_db():
                 pass
     print(f"✅ Loaded {len(id_to_name)} faces from database!")
 
+def delete_files_and_folders(json_files, folder_name = 'Data'):
+    for file in json_files:
+        if os.path.exists(file):
+            try:
+                os.remove(file)
+                print(f"Deleted file: {file}")
+            except Exception as e:
+                print(f"Error deleting {file}: {e}")
+        else:
+            print(f"File not found: {file}")
+    
+    # Delete folder
+    if os.path.exists(folder_name) and os.path.isdir(folder_name):
+        try:
+            shutil.rmtree(folder_name)
+            print(f"Deleted folder: {folder_name}")
+        except Exception as e:
+            print(f"Error deleting folder {folder_name}: {e}")
+    else:
+        print(f"Folder not found: {folder_name}")
 
 def main():
     load_db()  # Load saved embeddings at startup
     load_detection_logs()   # Load saved embeddings at startup
     start_cleanup_thread()
-    src = "rtsp://admin:bitsathY@192.168.1.11" #"rtsp://admin:bitsathY@192.168.1.1"
+    src = 0  #"rtsp://admin:bitsathY@192.168.1.1"
     while True:
         print("\nOptions:")
         print("1️⃣ Add a face from an image file")
@@ -703,6 +816,9 @@ def main():
         elif choice == '4':
             real_time_recognition(src)
         elif choice == '5':
+            # Example usage
+            json_files_list = [known_log_file, unknown_log_file]
+            delete_files_and_folders(json_files_list)
             print("👋 Exiting...")
             break
         else:
