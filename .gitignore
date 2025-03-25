@@ -1,1 +1,12 @@
-*/node_modules/ 
+#frontend
+
+node_modules/
+
+#backend 
+
+.vscode/
+__pycache__/
+Data/
+*.json
+dataset/
+!name_mapping.json
