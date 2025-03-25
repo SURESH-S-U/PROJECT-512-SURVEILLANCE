@@ -9,7 +9,7 @@ export default function Footer() {
           <div>
             <div className="flex items-center gap-2">
               <Brain className="w-8 h-8 text-blue-500" />
-              <span className="text-2xl font-bold">512D</span>
+              <span className="text-2xl font-bold">512d</span>
             </div>
             <p className="mt-4 text-gray-400">
               Leading the future of facial recognition technology with advanced AI solutions.
