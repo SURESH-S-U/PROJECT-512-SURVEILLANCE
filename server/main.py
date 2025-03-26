@@ -7,36 +7,42 @@ import json
 import time
 import threading
 from queue import Queue
+from threading import Event, Timer
 import warnings
-import json
 from datetime import datetime
 import hashlib
 import shutil
 from threading import Timer
-from datetime import datetime
+import base64
+from flask import Flask, jsonify, Response, request, send_from_directory
+from flask_cors import CORS
 
+# Initialize Flask app
+app = Flask(__name__)
+CORS(app)  # Enable CORS for all routes
+
+# Suppress warnings
 warnings.filterwarnings("ignore", category=RuntimeWarning, module="insightface")
 warnings.filterwarnings("ignore", category=FutureWarning, module="numpy")
 
+# Initialize face analysis model
 model = insightface.app.FaceAnalysis(name='buffalo_l', providers=['CUDAExecutionProvider'])
-model.prepare(ctx_id=0, det_size=(640, 640), det_thresh=0.75)  # Higher threshold for better quality
+model.prepare(ctx_id=0, det_size=(640, 640), det_thresh=0.75)
 print("\n✅ Model loaded successfully!")
 
-
-# Add these global variables
+# Global variables
 FACES_DIR = "Data/Faces"
 KNOWN_FACES_DIR = os.path.join(FACES_DIR, "known")
 UNKNOWN_FACES_DIR = os.path.join(FACES_DIR, "unknown")
-FACE_UPDATE_INTERVAL = 10  # seconds
+FACE_UPDATE_INTERVAL = 10
 cleanup_timer = None
-face_last_saved = {}  # Track when each face was last saved
-
+face_last_saved = {}
 
 face_db = {}
 id_to_name = []
 unknown_counter = 1
 embedding_dim = 512  
-index = faiss.IndexFlatIP(embedding_dim) 
+index = faiss.IndexFlatIP(embedding_dim)
 db_file = "face_db.json"
 known_faces = set()
 
@@ -44,26 +50,96 @@ face_trackers = {}
 GRACE_PERIOD = 15  
 UNKNOWN_THRESHOLD = 15  
 SIMILARITY_THRESHOLD = 0.7  
-IOU_THRESHOLD = 0.5 
+IOU_THRESHOLD = 0.5
 
-
-
-
-# Add after other global variables
 known_log_file = "detect_known.json"
 unknown_log_file = "detect_unknown.json"
+sent_hashes_file = "sent_hashes.json"
 known_detections = {}
 unknown_detections = {}
 last_save_time = time.time()
-SAVE_INTERVAL = 5 
+SAVE_INTERVAL = 5
+
+# Video stream variables
+video_stream = None
+stop_event = Event()
+current_frame = None
+frame_lock = threading.Lock()
+
+# Track shown faces
+shown_face_hashes = set()
+sent_face_hashes = set()
+FACE_COOLDOWN = 300  # 5 minutes cooldown for sending the same face again
+last_sent_times = {}  # Track when each face was last sent
+
+def initialize_detection_files():
+    """Initialize or clear the detection JSON files"""
+    global known_detections, unknown_detections, shown_face_hashes, sent_face_hashes, last_sent_times
+    
+    # Clear existing files if needed
+    for file_path in [known_log_file, unknown_log_file]:
+        try:
+            if os.path.exists(file_path):
+                os.remove(file_path)
+                print(f"🗑️ Cleared existing file: {file_path}")
+        except Exception as e:
+            print(f"⚠️ Error clearing {file_path}: {e}")
+    
+    # Initialize empty dictionaries and clear shown faces
+    known_detections = {}
+    unknown_detections = {}
+    shown_face_hashes = set()
+    sent_face_hashes = set()
+    last_sent_times = {}
+    
+    # Create new empty files
+    try:
+        with open(known_log_file, 'w') as f:
+            json.dump({}, f)
+        with open(unknown_log_file, 'w') as f:
+            json.dump({}, f)
+        with open(sent_hashes_file, 'w') as f:
+            json.dump([], f)
+        print("✅ Initialized empty detection files")
+    except Exception as e:
+        print(f"⚠️ Error initializing detection files: {e}")
+
+def load_sent_hashes():
+    """Load the set of face hashes that have already been sent"""
+    global sent_face_hashes, last_sent_times
+    try:
+        if os.path.exists(sent_hashes_file):
+            with open(sent_hashes_file, 'r') as f:
+                data = json.load(f)
+                if isinstance(data, dict):
+                    # New format with timestamps
+                    last_sent_times = data
+                    sent_face_hashes = set(data.keys())
+                else:
+                    # Old format (list of hashes)
+                    sent_face_hashes = set(data)
+        else:
+            sent_face_hashes = set()
+            last_sent_times = {}
+    except Exception as e:
+        print(f"⚠️ Error loading sent hashes: {e}")
+        sent_face_hashes = set()
+        last_sent_times = {}
+
+def save_sent_hashes():
+    """Save the set of face hashes that have been sent"""
+    try:
+        with open(sent_hashes_file, 'w') as f:
+            json.dump(last_sent_times, f)
+    except Exception as e:
+        print(f"⚠️ Error saving sent hashes: {e}")
 
 def generate_face_hash(embedding):
     """Generate a unique hash for a face embedding to avoid duplicates."""
-    if embedding is None:
+    if embedding is None or embedding.size == 0:
         return None
     hash_obj = hashlib.md5(embedding.tobytes())
-    return hash_obj.hexdigest()[:10]
-
+    return hash_obj.hexdigest()[:12]  # Longer hash for better uniqueness
 
 def save_face_image(frame, bbox, name, embedding):
     """Save a detected face image with timestamp and hash, deleting previous images."""
@@ -102,7 +178,7 @@ def save_face_image(frame, bbox, name, embedding):
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     face_hash = generate_face_hash(embedding)
     if face_hash is None:
-        face_hash = str(hash(str(bbox)))[:10]  # Fallback if embedding is None
+        face_hash = str(hash(str(bbox)))[:12]  # Fallback if embedding is None
     
     filename = f"{timestamp}_{face_hash}.jpg"
     file_path = os.path.join(face_dir, filename)
@@ -123,7 +199,7 @@ def save_face_image(frame, bbox, name, embedding):
     face_last_saved[face_id] = current_time
     
     print(f"💾 Saved face image for {face_id} to {file_path}")
-    
+
 def delete_old_images(interval=60):
     """Periodically clean up old face images for known faces."""
     global cleanup_timer
@@ -136,7 +212,7 @@ def delete_old_images(interval=60):
             for name_dir in os.listdir(KNOWN_FACES_DIR):
                 person_dir = os.path.join(KNOWN_FACES_DIR, name_dir)
                 if os.path.isdir(person_dir):
-                    images = [f for f in os.listdir(person_dir) if f.endswith(('.jpg', '.jpeg', '.png'))]
+                    images = [f for f in os.listdir(person_dir) if f.lower().endswith(('.jpg', '.jpeg', '.png'))]
                     if len(images) > 5:  # Keep only 5 most recent images per person
                         # Sort by timestamp (which is at the beginning of filename)
                         images.sort(reverse=True)
@@ -153,7 +229,6 @@ def delete_old_images(interval=60):
     cleanup_timer.daemon = True
     cleanup_timer.start()
 
-
 def start_cleanup_thread():
     """Start the background cleanup thread."""
     # Create required directories if they don't exist
@@ -163,11 +238,9 @@ def start_cleanup_thread():
     # Start the cleanup thread
     delete_old_images(60)
 
-
-
 def load_detection_logs():
     """Load existing detection logs if they exist."""
-    global known_detections, unknown_detections
+    global known_detections, unknown_detections, shown_face_hashes
     
     try:
         if os.path.exists(known_log_file):
@@ -183,24 +256,148 @@ def load_detection_logs():
             print(f"✅ Loaded {len(unknown_detections)} unknown face logs")
         else:
             unknown_detections = {}
+            
+        # Initialize shown face hashes from existing detections
+        shown_face_hashes = set()
+        for det_id, data in known_detections.items():
+            if "face_hash" in data:
+                shown_face_hashes.add(data["face_hash"])
+        for det_id, data in unknown_detections.items():
+            if "face_hash" in data:
+                shown_face_hashes.add(data["face_hash"])
+                
     except Exception as e:
         print(f"⚠️ Error loading detection logs: {e}")
         known_detections = {}
         unknown_detections = {}
+        shown_face_hashes = set()
+
+def save_detection_data(name, bbox, score, embedding, camera_id=0):
+    """Save detection data to the appropriate JSON file, ensuring unique entries per unknown person."""
+    global known_detections, unknown_detections, last_save_time, shown_face_hashes
+    
+    timestamp = datetime.now().isoformat()
+    face_hash = generate_face_hash(embedding)
+    
+    if face_hash is None:
+        face_hash = hashlib.md5(name.encode() + timestamp.encode()).hexdigest()[:12]
+    
+    # Unique identifier based on name
+    unique_id = name.replace(" (tracking)", "")
+    
+    # Skip if we've already shown this face
+    if face_hash in shown_face_hashes:
+        return
+    
+    detection_data = {
+        "name": unique_id,
+        "first_detected": timestamp,  # Keep track of first detection time
+        "last_detected": timestamp,   # Update with latest detection time
+        "timestamps": [timestamp],    # Store multiple detection times
+        "detections": [{
+            "timestamp": timestamp,
+            "bbox": [float(coord) for coord in bbox],
+            "score": float(score),
+            "camera_id": camera_id,
+            "face_hash": face_hash
+        }]
+    }
+    
+    try:
+        # Check if this is a known or unknown face
+        if "Unknown" in name:
+            # For unknown faces, look for an existing entry with the same name pattern
+            existing_entry = None
+            for det_hash, data in list(unknown_detections.items()):
+                if data["name"] == unique_id and det_hash != face_hash:
+                    existing_entry = det_hash
+                    break
+            
+            if existing_entry:
+                # Update existing entry for the unknown face
+                existing_data = unknown_detections[existing_entry]
+                # Update last detection time
+                existing_data["last_detected"] = timestamp
+                # Append new timestamp if not already present
+                if timestamp not in existing_data.get("timestamps", []):
+                    existing_data["timestamps"].append(timestamp)
+                
+                # Add new detection to the list
+                existing_data["detections"].append({
+                    "timestamp": timestamp,
+                    "bbox": [float(coord) for coord in bbox],
+                    "score": float(score),
+                    "camera_id": camera_id,
+                    "face_hash": face_hash
+                })
+                
+                print(f"🔄 Updated existing unknown detection for {unique_id}")
+            else:
+                # Add new entry for the unknown face
+                unknown_detections[face_hash] = detection_data
+                print(f"➕ Added new unknown detection for {unique_id}")
+        
+        else:
+            # For known faces, similar logic as before
+            existing_entry = None
+            for det_id, data in known_detections.items():
+                if data["name"] == unique_id:
+                    existing_entry = det_id
+                    break
+            
+            if existing_entry:
+                # Update existing entry
+                existing_data = known_detections[existing_entry]
+                # Update last detection time
+                existing_data["last_detected"] = timestamp
+                # Append new timestamp
+                if timestamp not in existing_data.get("timestamps", []):
+                    existing_data["timestamps"].append(timestamp)
+                
+                # Add new detection to the list
+                existing_data["detections"].append({
+                    "timestamp": timestamp,
+                    "bbox": [float(coord) for coord in bbox],
+                    "score": float(score),
+                    "camera_id": camera_id,
+                    "face_hash": face_hash
+                })
+                
+                print(f"🔄 Updated existing detection for {unique_id}")
+            else:
+                # Add new entry for the known person
+                known_detections[unique_id] = detection_data
+                print(f"➕ Added new detection for {unique_id}")
+        
+        # Mark this face as shown
+        shown_face_hashes.add(face_hash)
+        
+        # Save periodically
+        current_time = time.time()
+        if current_time - last_save_time > SAVE_INTERVAL:
+            save_detection_logs()
+            last_save_time = current_time
+    except Exception as e:
+        print(f"⚠️ Error saving detection data: {e}")
+
+        
 
 def save_detection_logs():
-    """Save detection logs to JSON files."""
+    """Save detection logs to JSON files, ensuring uniqueness and data integrity."""
+    global known_detections, unknown_detections
+    
     try:
+        # Save known detections
         with open(known_log_file, 'w') as f:
             json.dump(known_detections, f, indent=2)
         
+        # Save unknown detections
         with open(unknown_log_file, 'w') as f:
             json.dump(unknown_detections, f, indent=2)
             
         print(f"💾 Detection logs saved: {len(known_detections)} known, {len(unknown_detections)} unknown")
     except Exception as e:
         print(f"⚠️ Error saving detection logs: {e}")
-
 
 
 def bbox_iou(box1, box2):
@@ -298,7 +495,6 @@ def check_similar_unknown_faces(embeddings, name):
 
 def add_face(name, img_path=None):
     global index, id_to_name
-
 
     person_dir = f"Data/Images/{name}"
     
@@ -399,6 +595,9 @@ def search_face(img):
                 track_info["embedding"] = embedding
                 track_info["unrecognized_count"] = 0
                 track_info["score"] = best_score
+                
+                # Save detection data
+                save_detection_data(matched_name, bbox, best_score, embedding)
             else:
                 # Face not recognized confidently, but we have a tracking history
                 track_info["last_seen"] = current_time
@@ -415,7 +614,7 @@ def search_face(img):
                     unknown_name = add_unknown_face(embedding)
                     track_info["name"] = unknown_name
                     track_info["score"] = 0.0
-            
+                    save_detection_data(unknown_name, bbox, 0.0, embedding)
             
             results.append((bbox, track_info["name"], track_info["score"]))
             
@@ -435,6 +634,8 @@ def search_face(img):
                     "score": best_score
                 }
                 results.append((bbox, matched_name, best_score))
+                save_detection_data(matched_name, bbox, best_score, embedding)
+                save_face_image(img, bbox, matched_name, embedding)
             else:
                 # Unrecognized new face - don't immediately create Unknown entry
                 # Instead, start tracking and wait for more confident recognition
@@ -447,8 +648,6 @@ def search_face(img):
                     "score": 0.0
                 }
                 results.append((bbox, "Identifying...", 0.0))
-            if best_match_idx != -1 and best_score > 0.4:
-                save_face_image(img, bbox, matched_name, embedding)
     
     # Clean up old tracks
     for track_id in list(face_trackers.keys()):
@@ -481,251 +680,6 @@ def capture_and_save(name,src=0):
         print(f"✅ {angle} image saved.")
         
     add_face(name)  # Load all images after capturing
-
-
-
-class VideoStream:
-    def __init__(self, src=0):
-        self.stream = cv2.VideoCapture(src)
-        self.stream.set(cv2.CAP_PROP_BUFFERSIZE, 2)
-        self.grabbed, self.frame = self.stream.read()
-        self.stopped = False
-        self.retry_count = 0
-        self.thread = None
-
-    def update(self):
-        while not self.stopped:
-            grabbed = self.stream.grab()
-            if not grabbed:
-                self.retry_count += 1
-                if self.retry_count > 5:
-                    self.stop()
-                time.sleep(0.1)
-                continue
-            self.retry_count = 0
-            self.grabbed, self.frame = self.stream.retrieve()
-
-    def start(self):
-        self.thread = threading.Thread(target=self.update, args=())
-        self.thread.start()
-        return self
-
-    def stop(self):
-        self.stopped = True
-        if self.thread is not None:
-            self.thread.join()  # Wait for the thread to finish
-        self.stream.release()
-
-    def read(self):
-        return self.frame
-
-
-def get_box_style(face_type, is_overlapping=False):
-    """
-    Get visual style for a bounding box based on face type and overlap status.
-    
-    Args:
-        face_type: Type of face ("known", "unknown", or "identifying")
-        is_overlapping: Whether this box overlaps with others
-        
-    Returns:
-        Tuple of (color, thickness, line_type)
-    """
-    # Simple color scheme as per user request (BGR format)
-    if face_type == "unknown":
-        color = (0, 0, 255)    # Red for unknown faces
-    elif face_type == "identifying":
-        color = (0, 255, 255)  # Yellow for identifying faces
-    else:
-        color = (0, 255, 0)    # Green for known faces
-    
-    # Increase thickness for overlapping boxes
-    thickness = 3 if is_overlapping else 2
-    
-    # Use different line types for better distinction of overlapping boxes
-    line_type = cv2.LINE_AA if is_overlapping else cv2.LINE_8
-    
-    return color, thickness, line_type
-
-def real_time_recognition(src):
-    """Real-time face recognition with dynamic camera source and detection logging."""
-    global known_detections, unknown_detections, last_save_time
-    
-    # Determine if the source is a webcam index or URL
-    try:
-        src_int = src
-        vs = VideoStream(src=src_int).start()
-        window_name = f"Webcam {src_int} Face Recognition"
-        camera_id = f"webcam_{src_int}"
-    except ValueError:
-        vs = VideoStream(src=src).start()
-        window_name = f"Camera Stream: {src}"
-        # Extract a simpler camera_id from the source URL
-        camera_id = src.split("@")[-1].replace(".", "_") if "@" in src else "camera_stream"
-    
-    time.sleep(2.0)
-    print(f"📷 Starting {window_name}. Press 'q' to quit.")
-    
-    frame_counter = 0
-    PROCESS_EVERY = 2
-    label_positions = {}  # Track label positions to prevent overlap
-
-    while True:
-        frame = vs.read()
-        if frame is None:
-            print("❌ Error: Could not read frame.")
-            break
-
-        frame_counter += 1
-        if frame_counter % PROCESS_EVERY != 0:
-            continue
-
-        small_frame = cv2.resize(frame, (0,0), fx=0.5, fy=0.5)
-        results = search_face(small_frame)
-        
-        current_time = time.time()
-        timestamp = datetime.now().isoformat()
-        
-        scale_factor = 2
-        
-        # Scale all bounding boxes
-        scaled_results = []
-        for bbox, name, score in results:
-            x1, y1, x2, y2 = [int(coord * scale_factor) for coord in bbox]
-            scaled_results.append(((x1, y1, x2, y2), name, score))
-        
-        # Check for overlapping boxes
-        overlapping_boxes = set()
-        for i, (bbox1, _, _) in enumerate(scaled_results):
-            for j, (bbox2, _, _) in enumerate(scaled_results):
-                if i != j:
-                    # Calculate overlap
-                    x1 = max(bbox1[0], bbox2[0])
-                    y1 = max(bbox1[1], bbox2[1])
-                    x2 = min(bbox1[2], bbox2[2])
-                    y2 = min(bbox1[3], bbox2[3])
-                    
-                    if x1 < x2 and y1 < y2:
-                        # Boxes overlap
-                        overlapping_boxes.add(i)
-                        overlapping_boxes.add(j)
-        
-        # Reset label positions for this frame
-        label_positions = {}
-        
-        # Draw the boxes and labels with different styles
-        for i, (bbox, name, score) in enumerate(scaled_results):
-            x1, y1, x2, y2 = bbox
-            
-            # Determine face type for styling
-            face_type = "known"
-            if "Identifying" in name:
-                face_type = "identifying"
-            elif "Unknown" in name:
-                face_type = "unknown"
-                
-            # Get style based on face type and overlap status
-            color, thickness, line_type = get_box_style(face_type, i in overlapping_boxes)
-            
-            if "Unknown" in name and name.replace(" (tracking)", "") in id_to_name:
-                # Log unknown face detection
-                face_id = name.replace(" (tracking)", "")
-                
-                # Find the corresponding tracker and get embedding
-                embedding = None
-                for track_id, info in face_trackers.items():
-                    if info["name"] == face_id:
-                        embedding = info["embedding"]  # Keep as numpy array for image saving
-                        embedding_list = info["embedding"].tolist()  # Convert to list for JSON
-                        
-                        # Save face image for unknown face
-                        if "Identifying" not in face_id:
-                            full_size_bbox = [x1, y1, x2, y2]
-                            save_face_image(frame, full_size_bbox, face_id, embedding)
-                        break
-                
-                if embedding is not None:
-                    unknown_detections[face_id] = {
-                        "id": face_id,
-                        "camera_id": camera_id,
-                        "embedding": embedding_list,
-                        "timestamp": timestamp
-                    }
-            
-            elif not "Identifying" in name:
-                # Log known face detection (excluding "Identifying...")
-                face_id = name.replace(" (tracking)", "")
-                if face_id in id_to_name:
-                    known_detections[face_id] = {
-                        "id": face_id,
-                        "camera_id": camera_id,
-                        "timestamp": timestamp
-                    }
-                    
-                    # Find the corresponding tracker to get embedding for saving
-                    embedding = None
-                    for track_id, info in face_trackers.items():
-                        if info["name"] == face_id:
-                            embedding = info["embedding"]
-                            break
-                    
-                    # Save face image for known face
-                    full_size_bbox = [x1, y1, x2, y2]
-                    save_face_image(frame, full_size_bbox, face_id, embedding)
-            
-            # Draw the rectangle with the determined style
-            cv2.rectangle(frame, (x1, y1), (x2, y2), color, thickness, line_type)
-            
-            # Prepare label text
-            label = name.replace(" (tracking)", "")
-            score_text = f" ({score:.2f})" if score > 0 else ""
-            label_text = f"{label}{score_text}"
-            
-            # Find a good position for the label to avoid overlap
-            label_y = y1 - 10  # Default position
-            
-            # Check if this position overlaps with existing labels
-            text_size = cv2.getTextSize(label_text, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 2)[0]
-            text_width, text_height = text_size
-            
-            # Create a rectangle representing the text area
-            text_x1, text_y1 = x1, label_y - text_height
-            text_x2, text_y2 = x1 + text_width, label_y + 5
-            
-            # Check for overlaps with existing label positions
-            overlap = False
-            for pos_id, (tx1, ty1, tx2, ty2) in label_positions.items():
-                if (text_x1 < tx2 and text_x2 > tx1 and 
-                    text_y1 < ty2 and text_y2 > ty1):
-                    overlap = True
-                    break
-            
-            # If overlap, try placing the label inside the box at the bottom
-            if overlap:
-                label_y = y2 - 5
-                text_y1, text_y2 = label_y - text_height, label_y + 5
-            
-            # Store this label position
-            label_id = hash(f"{x1}{y1}{x2}{y2}")
-            label_positions[label_id] = (text_x1, text_y1, text_x2, text_y2)
-            
-            # Draw the label
-            cv2.putText(frame, label_text, (x1, label_y), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2, cv2.LINE_AA)
-        
-        # Save logs every SAVE_INTERVAL seconds
-        if current_time - last_save_time >= SAVE_INTERVAL:
-            save_detection_logs()
-            last_save_time = current_time
-
-        cv2.imshow(window_name, frame)
-        if cv2.waitKey(1) & 0xFF == ord('q'):
-            # Save logs before exiting
-            save_detection_logs()
-            break
-
-    vs.stop()
-    cv2.destroyAllWindows()
 
 def save_db():
     """Save FAISS index and name mappings."""
@@ -780,54 +734,308 @@ def delete_files_and_folders(json_files, folder_name = 'Data'):
     else:
         print(f"Folder not found: {folder_name}")
 
-def main():
-    load_db()  # Load saved embeddings at startup
-    load_detection_logs()   # Load saved embeddings at startup
-    start_cleanup_thread()
-    src = 0  #"rtsp://admin:bitsathY@192.168.1.1"
-    while True:
-        print("\nOptions:")
-        print("1️⃣ Add a face from an image file")
-        print("2️⃣ Capture and add a face using webcam (multiple angles)")
-        print("3️⃣ Search for a face in an image")
-        print("4️⃣ Start real-time face recognition")
-        print("5️⃣ Exit")
-        choice = input("Enter your choice: ").strip()
-        
-        if choice == '1':
-            name = input("Enter name: ").strip()
-            img_path = input("Enter image path: ").strip()
-            if os.path.exists(img_path):
-                add_face(name, img_path)
-            else:
-                print("❌ File not found!")
-        elif choice == '2':
-            name = input("Enter name: ").strip()
-            capture_and_save(name,src=src)
-        elif choice == '3':
-            img_path = input("Enter test image path: ").strip()
-            if os.path.exists(img_path):
-                img = cv2.imread(img_path)
-                results = search_face(img)
-                for bbox, name, score in results:
-                    print(f"✅ Matched: {name} (Similarity: {score:.2f})")
-            else:
-                print("❌ File not found!")
-        elif choice == '4':
-            real_time_recognition(src)
-        elif choice == '5':
-            # Example usage
-            json_files_list = [known_log_file, unknown_log_file]
-            delete_files_and_folders(json_files_list)
-            print("👋 Exiting...")
-            break
-        else:
-            print("❌ Invalid choice, try again.")
+class VideoStream:
+    def __init__(self, src=0):
+        self.stream = cv2.VideoCapture(src)
+        self.stream.set(cv2.CAP_PROP_BUFFERSIZE, 2)
+        self.grabbed, self.frame = self.stream.read()
+        self.stopped = False
+        self.retry_count = 0
+        self.thread = None
 
-if __name__ == "__main__":
+    def update(self):
+        while not self.stopped:
+            grabbed = self.stream.grab()
+            if not grabbed:
+                self.retry_count += 1
+                if self.retry_count > 5:
+                    self.stop()
+                time.sleep(0.1)
+                continue
+            self.retry_count = 0
+            self.grabbed, self.frame = self.stream.retrieve()
+
+    def start(self):
+        self.thread = threading.Thread(target=self.update, args=())
+        self.thread.start()
+        return self
+
+    def stop(self):
+        self.stopped = True
+        if self.thread is not None:
+            self.thread.join()
+        self.stream.release()
+
+    def read(self):
+        return self.frame
+
+# Flask routes for serving face images
+@app.route('/known_faces')
+def get_known_faces():
+    """Get list of all known faces with their latest images"""
+    known_faces = []
     try:
-        main()
+        if os.path.exists(KNOWN_FACES_DIR):
+            for name in os.listdir(KNOWN_FACES_DIR):
+                face_dir = os.path.join(KNOWN_FACES_DIR, name)
+                if os.path.isdir(face_dir):
+                    # Get the most recent image
+                    images = [f for f in os.listdir(face_dir) if f.lower().endswith(('.jpg', '.jpeg', '.png'))]
+                    if images:
+                        images.sort(reverse=True)  # Sort by timestamp (newest first)
+                        latest_image = images[0]
+                        image_path = os.path.join(face_dir, latest_image)
+                        
+                        # Read and encode the image
+                        with open(image_path, 'rb') as img_file:
+                            encoded_image = base64.b64encode(img_file.read()).decode('utf-8')
+                        
+                        known_faces.append({
+                            "name": name,
+                            "image": f"data:image/jpeg;base64,{encoded_image}",
+                            "last_updated": latest_image.split('_')[0]  # Extract timestamp from filename
+                        })
+        return jsonify(known_faces)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
-    finally:
-        if cleanup_timer is not None:
-            cleanup_timer.cancel()
+@app.route('/unknown_faces')
+def get_unknown_faces():
+    """Get list of all unknown faces with their images"""
+    unknown_faces = []
+    try:
+        if os.path.exists(UNKNOWN_FACES_DIR):
+            for folder in os.listdir(UNKNOWN_FACES_DIR):
+                if folder.startswith('Unknown'):
+                    face_dir = os.path.join(UNKNOWN_FACES_DIR, folder)
+                    if os.path.isdir(face_dir):
+                        # Get all images for this unknown face
+                        images = [f for f in os.listdir(face_dir) if f.lower().endswith(('.jpg', '.jpeg', '.png'))]
+                        if images:
+                            images.sort(reverse=True)  # Sort by timestamp (newest first)
+                            latest_image = images[0]
+                            image_path = os.path.join(face_dir, latest_image)
+                            
+                            with open(image_path, 'rb') as img_file:
+                                encoded_image = base64.b64encode(img_file.read()).decode('utf-8')
+                            
+                            unknown_faces.append({
+                                "id": folder,
+                                "image": f"data:image/jpeg;base64,{encoded_image}",
+                                "first_detected": images[-1].split('_')[0],  # Oldest image timestamp
+                                "last_detected": latest_image.split('_')[0]   # Newest image timestamp
+                            })
+        return jsonify(unknown_faces)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/face_images/<path:filename>')
+def get_face_image(filename):
+    """Serve face images directly"""
+    try:
+        # Check if it's a known or unknown face
+        if filename.startswith('Unknown'):
+            directory = os.path.join(UNKNOWN_FACES_DIR, filename.split('_')[0])
+        else:
+            directory = os.path.join(KNOWN_FACES_DIR, filename.split('_')[0])
+        
+        return send_from_directory(directory, filename)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 404
+
+@app.route('/video_feed')
+def video_feed():
+    """Route to stream live video feed"""
+    def generate():
+        while not stop_event.is_set():
+            with frame_lock:
+                if current_frame is not None:
+                    ret, jpeg = cv2.imencode('.jpg', current_frame)
+                    if ret:
+                        yield (b'--frame\r\n'
+                               b'Content-Type: image/jpeg\r\n\r\n' + jpeg.tobytes() + b'\r\n')
+            time.sleep(0.05)
+
+    return Response(generate(),
+                   mimetype='multipart/x-mixed-replace; boundary=frame')
+
+@app.route('/detection_data')
+def get_detection_data():
+    """Route to fetch known and unknown detection data with improved deduplication"""
+    global sent_face_hashes, last_sent_times
+    
+    try:
+        # Load latest detection logs
+        with open(known_log_file, 'r') as f:
+            known_detections = json.load(f)
+                
+        with open(unknown_log_file, 'r') as f:
+            unknown_detections = json.load(f)
+        
+        current_time = time.time()
+        
+        # Process known detections
+        known_users = []
+        for name, data in known_detections.items():
+            # Take the most recent detection
+            latest_detection = max(data['detections'], key=lambda x: x['timestamp'])
+            face_hash = latest_detection.get("face_hash", "")
+            
+            # Skip if within cooldown period
+            if face_hash in last_sent_times:
+                if current_time - last_sent_times[face_hash] < FACE_COOLDOWN:
+                    continue
+            
+            face_image = find_latest_face_image(name, known=True)
+            if face_image:
+                known_users.append({
+                    "_id": name,
+                    "name": data["name"],
+                    "first_detected": data.get("first_detected", latest_detection['timestamp']),
+                    "last_detected": data.get("last_detected", latest_detection['timestamp']),
+                    "camera_id": latest_detection.get("camera_id", 0),
+                    "face_image": face_image,
+                    "confidence": latest_detection.get("score", 0),
+                    "status": "known"
+                })
+                # Update last sent time
+                last_sent_times[face_hash] = current_time
+        
+        # Process unknown detections
+        unknown_users = []
+        for face_hash, data in unknown_detections.items():
+            # Take the most recent detection
+            latest_detection = max(data['detections'], key=lambda x: x['timestamp'])
+            
+            # Skip if within cooldown period
+            if face_hash in last_sent_times:
+                if current_time - last_sent_times[face_hash] < FACE_COOLDOWN:
+                    continue
+            
+            face_image = find_latest_face_image(data["name"], known=False)
+            if face_image:
+                unknown_users.append({
+                    "_id": face_hash,
+                    "name": "Unknown",
+                    "first_detected": data.get("first_detected", latest_detection['timestamp']),
+                    "last_detected": data.get("last_detected", latest_detection['timestamp']),
+                    "camera_id": latest_detection.get("camera_id", 0),
+                    "face_image": face_image,
+                    "confidence": latest_detection.get("score", 0),
+                    "status": "unknown"
+                })
+                # Update last sent time
+                last_sent_times[face_hash] = current_time
+        
+        # Save the updated sent hashes
+        save_sent_hashes()
+        
+        # Combine and sort by last_detected (newest first)
+        all_detections = known_users + unknown_users
+        all_detections.sort(key=lambda x: x["last_detected"], reverse=True)
+        
+        return jsonify(all_detections)
+        
+    except Exception as e:
+        print(f"Error in get_detection_data: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/stop', methods=['POST'])
+def stop_processing():
+    """Route to stop the recognition process"""
+    try:
+        stop_event.set()
+        if video_stream is not None:
+            video_stream.stop()
+        return jsonify({"status": "stopped"})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/clear_detections', methods=['POST'])
+def clear_detections():
+    """Route to clear all detection data"""
+    try:
+        initialize_detection_files()
+        return jsonify({"status": "success", "message": "Detection data cleared"})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+def find_latest_face_image(user_id, known=True):
+    """Helper function to find the latest face image for a user"""
+    if known:
+        user_dir = os.path.join(KNOWN_FACES_DIR, user_id)
+    else:
+        user_dir = os.path.join(UNKNOWN_FACES_DIR, user_id)
+    
+    if not os.path.exists(user_dir):
+        return None
+    
+    image_files = [f for f in os.listdir(user_dir) if f.lower().endswith(('.jpg', '.jpeg', '.png'))]
+    if not image_files:
+        return None
+    
+    # Sort by timestamp (first part of filename)
+    image_files.sort(reverse=True)
+    latest_image = os.path.join(user_dir, image_files[0])
+    
+    try:
+        with open(latest_image, 'rb') as img_file:
+            encoded_image = base64.b64encode(img_file.read()).decode('utf-8')
+        return f"data:image/jpeg;base64,{encoded_image}"
+    except Exception as e:
+        print(f"Error reading face image: {e}")
+        return None
+
+def run_recognition():
+    """Function to run recognition in a background thread"""
+    global video_stream, current_frame
+    src = 0  # Default webcam
+    video_stream = VideoStream(src=src).start()
+    time.sleep(2.0)  # Allow camera to warm up
+    
+    while not stop_event.is_set():
+        frame = video_stream.read()
+        if frame is not None:
+            # Process frame for recognition
+            small_frame = cv2.resize(frame, (0,0), fx=0.5, fy=0.5)
+            results = search_face(small_frame)
+            
+            # Draw results on frame
+            scale_factor = 2
+            for bbox, name, score in results:
+                x1, y1, x2, y2 = [int(coord * scale_factor) for coord in bbox]
+                color = (0, 255, 0) if "Unknown" not in name else (0, 0, 255)
+                cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+                cv2.putText(frame, f"{name} ({score:.2f})", (x1, y1-10), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+            
+            # Update global frame
+            with frame_lock:
+                current_frame = frame.copy()
+        
+        time.sleep(0.05)
+    
+    video_stream.stop()
+
+def initialize():
+    """Initialize the application"""
+    # Initialize detection files (clears old data)
+    initialize_detection_files()
+    
+    # Load face database
+    load_db()
+    
+    # Load sent face hashes
+    load_sent_hashes()
+    
+    # Start cleanup thread
+    start_cleanup_thread()
+    
+    # Start recognition thread
+    recognition_thread = threading.Thread(target=run_recognition)
+    recognition_thread.daemon = True
+    recognition_thread.start()
+
+if __name__ == '__main__':
+    initialize()
+    app.run(host='0.0.0.0', port=5000, threaded=True)
